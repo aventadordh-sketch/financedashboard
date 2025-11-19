@@ -1,2 +1,24 @@
 # financedashboard
 
+## First Time Installation in Terminal ##
+cd ~/Desktop/FinanceDashboardpython3 -m venv .venvsource .venv/bin/activatepip install streamlit streamlit-option-menupip install pandas yfinance streamlit plotly sqlalchemy pymysqlbrew install dolt  # macOS choco 
+install dolt  # Windows
+
+## Start DOLT Sql Server ##
+# Mac #
+cd /Users/dinohsu/Desktop/FinanceDashboard/earnings
+dolt sql-server --port 3307
+
+## Launch Streamlit ##
+cd /Users/dinohsu/Desktop/FinanceDashboard
+source .venv/bin/activate
+streamlit run finance_dashboard.py
+
+
+
+Tips:
+dolt pull  # update database
+cd ..  # return to previous folder
+cd ~/Desktop/FinanceDashboard/earnings
+
+
