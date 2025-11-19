@@ -4,6 +4,10 @@
 cd ~/Desktop/FinanceDashboardpython3 -m venv .venvsource .venv/bin/activatepip install streamlit streamlit-option-menupip install pandas yfinance streamlit plotly sqlalchemy pymysqlbrew install dolt  # macOS choco 
 install dolt  # Windows
 
+## 🔌 Local Setup: Dolt Earnings DB ##
+##This app depends on a local Dolt database for financial statement data. ##
+dolt clone post-no-preference/earnings
+
 ## Start DOLT Sql Server ##
 # Mac #
 cd /Users/dinohsu/Desktop/FinanceDashboard/earnings
