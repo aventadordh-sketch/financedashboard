@@ -1,0 +1,476 @@
+        label = "Income Statement"
+        filtered_df = pd.DataFrame()
+
+        if dolt_df is not None and not dolt_df.empty:
+            if "period" in dolt_df.columns:
+                dolt_df["period"] = dolt_df["period"].astype(str).str.upper()
+                period_value = "YEAR" if statement_period == "Annual" else "QUARTER"
+                filtered_df = dolt_df[dolt_df["period"] == period_value].copy()
+            else:
+                filtered_df = dolt_df.copy()
+
+            if filtered_df.empty:
+                st.info(f"No {statement_period.lower()} income statement data available for this ticker.")
+            else:
+                for col in filtered_df.select_dtypes(include=["float", "int"]).columns:
+                    filtered_df[col] = filtered_df[col].apply(
+                        lambda x: f"{x:,.0f}" if pd.notnull(x) else "—"
+                    )
+
+                ordered_cols = ["date"] + [c for c in filtered_df.columns if c != "date"]
+                df_clean = filtered_df[ordered_cols].copy()
+
+                if "date" not in df_clean.columns:
+                    st.error("No date column found in income statement.")
+                else:
+                    df_clean["date"] = pd.to_datetime(df_clean["date"], errors="coerce")
+                    df_clean = df_clean.sort_values("date")
+
+                    df_transposed = (
+                        df_clean.set_index("date")
+                                .T
+                                .reset_index()
+                                .rename(columns={"index": label})
+                    )
+
+                    # Remove metadata
+                    df_transposed = df_transposed[~df_transposed[label].isin(["act_symbol", "period"])]
+                    df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
+
+                    # Format column names
+                    formatted_cols = []
+                    for col in df_transposed.columns:
+                        if isinstance(col, pd.Timestamp):
+                            if statement_period == "Annual":
+                                formatted_cols.append(col.strftime("%Y"))
+                            else:
+                                q = (col.month - 1) // 3 + 1
+                                formatted_cols.append(f"{col.year} Q{q}")
+                        else:
+                            formatted_cols.append(col)
+                    df_transposed.columns = formatted_cols
+
+                    # Scale logic
+                    def try_parse(x):
+                        try:
+                            return float(str(x).replace(",", ""))
+                        except:
+                            return None
+
+                    numeric_values = []
+                    for col in df_transposed.columns:
+                        if col != label:
+                            numeric_values.extend([try_parse(x) for x in df_transposed[col] if try_parse(x) is not None])
+
+                    max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+                    if max_abs_val >= 1e12:
+                        scale, suffix = 1e12, "T"
+                    elif max_abs_val >= 1e9:
+                        scale, suffix = 1e9, "B"
+                    elif max_abs_val >= 1e6:
+                        scale, suffix = 1e6, "M"
+                    elif max_abs_val >= 1e3:
+                        scale, suffix = 1e3, "K"
+                    else:
+                        scale, suffix = 1, ""
+
+                    def format_scaled(x):
+                        val = try_parse(x)
+                        return f"{val / scale:,.2f}" if val is not None else "—"
+
+                    for col in df_transposed.columns:
+                        if col != label:
+                            df_transposed[col] = df_transposed[col].apply(format_scaled)
+    # -----------------------------
+    # Balance Sheet
+    # -----------------------------
+    elif statement_tab == "Balance Sheet":
+        def format_balance_sheet(df, label):
+            if df is None or df.empty:
+                return st.info(f"No {label} data available.")
+
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["period"] = df["period"].str.upper()
+            df = df[df["period"] == ("YEAR" if statement_period == "Annual" else "QUARTER")]
+
+            if df is None or df.empty:
+                return st.info(f"No {statement_period.lower()} data for {label}.")
+
+            df = df.sort_values("date")
+            ordered_cols = ["date"] + [col for col in df.columns if col not in ["date", "act_symbol", "period"]]
+            df_clean = df[ordered_cols].copy()
+
+            df_transposed = (
+                df_clean.set_index("date")
+                        .T
+                        .reset_index()
+                        .rename(columns={"index": label})
+            )
+
+            df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
+
+            # Format column names
+            formatted_cols = []
+            for col in df_transposed.columns:
+                if isinstance(col, pd.Timestamp):
+                    if statement_period == "Annual":
+                        formatted_cols.append(col.strftime("%Y"))
+                    else:
+                        q = (col.month - 1) // 3 + 1
+                        formatted_cols.append(f"{col.year} Q{q}")
+                else:
+                    formatted_cols.append(col)
+            df_transposed.columns = formatted_cols
+
+            # Scale logic
+            def try_parse(x):
+                try:
+                    return float(str(x).replace(",", ""))
+                except:
+                    return None
+
+            numeric_values = []
+            for col in df_transposed.columns:
+                if col != label:
+                    numeric_values.extend([try_parse(x) for x in df_transposed[col] if try_parse(x) is not None])
+
+            max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+            if max_abs_val >= 1e12:
+                scale, suffix = 1e12, "T"
+            elif max_abs_val >= 1e9:
+                scale, suffix = 1e9, "B"
+            elif max_abs_val >= 1e6:
+                scale, suffix = 1e6, "M"
+            elif max_abs_val >= 1e3:
+                scale, suffix = 1e3, "K"
+            else:
+                scale, suffix = 1, ""
+
+            def format_scaled(x):
+                val = try_parse(x)
+                return f"{val / scale:,.2f}" if val is not None else "—"
+
+            for col in df_transposed.columns:
+                if col != label:
+                    df_transposed[col] = df_transposed[col].apply(format_scaled)
+
+            st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
+            st.data_editor(
+                df_transposed,
+                use_container_width=True,
+                hide_index=True,
+                key=f"{label.lower().replace(' ', '_')}_editor",  # ✅ Safe for all balance sheet types
+                column_config={label: st.column_config.TextColumn(label)}
+            )
+
+        format_balance_sheet(assets_df, "Assets")
+        format_balance_sheet(liabilities_df, "Liabilities")
+        format_balance_sheet(equity_df, "Equity")
+
+# -----------------------------
+# Cash Flow Statement
+# -----------------------------
+    elif statement_tab == "Cash Flow":
+        dolt_df = get_dolthub_cash_flow(ticker)
+
+        # ✅ Step 1: Define cash flow fields in the order shown in DoltHub
+        CASH_FLOW_FIELDS = [
+            "net_income",
+            "depreciation_amortization_and_depletion",
+            "net_change_from_assets",
+            "net_cash_from_discontinued_operations",
+            "other_operating_activities",
+            "net_cash_from_operating_activities",
+            "property_and_equipment",
+            "acquisition_of_subsidiaries",
+            "investments",
+            "other_investing_activities",
+            "net_cash_from_investing_activities",
+            "issuance_of_capital_stock",
+            "issuance_of_debt",
+            "increase_short_term_debt",
+            "payment_of_dividends_and_other_distributions",
+            "other_financing_activities",
+            "net_cash_from_financing_activities",
+            "effect_of_exchange_rate_changes",
+            "net_change_in_cash_and_equivalents",
+            "cash_at_beginning_of_period",
+            "cash_at_end_of_period",
+            "diluted_net_eps"
+        ]
+
+        # ✅ Step 2: Build cash_flow_df using ordered fields
+        meta_columns = ["date", "period", "act_symbol"]
+        available_meta = [col for col in meta_columns if col in dolt_df.columns]
+        available_cash_cols = [col for col in CASH_FLOW_FIELDS if col in dolt_df.columns]
+        cash_flow_df = dolt_df[available_meta + available_cash_cols].copy()
+
+        # ✅ Step 3: Format and render
+        def format_cash_flow(df, label="Cash Flow"):
+            if df.empty:
+                return st.info(f"No {label} data available.")
+
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["period"] = df["period"].astype(str).str.upper()
+            df = df[df["period"] == ("YEAR" if statement_period == "Annual" else "QUARTER")]
+
+            if df.empty:
+                return st.info(f"No {statement_period.lower()} cash flow data available.")
+
+            df = df.sort_values("date")
+            ordered_cols = ["date"] + [col for col in CASH_FLOW_FIELDS if col in df.columns]
+            df_clean = df[ordered_cols].copy()
+
+            df_transposed = (
+                df_clean.set_index("date")
+                        .T
+                        .reset_index()
+                        .rename(columns={"index": label})
+            )
+
+            df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
+
+            formatted_cols = []
+            for col in df_transposed.columns:
+                if isinstance(col, pd.Timestamp):
+                    if statement_period == "Annual":
+                        formatted_cols.append(col.strftime("%Y"))
+                    else:
+                        q = (col.month - 1) // 3 + 1
+                        formatted_cols.append(f"{col.year} Q{q}")
+                else:
+                    formatted_cols.append(col)
+            df_transposed.columns = formatted_cols
+
+            def try_parse(x):
+                try:
+                    return float(str(x).replace(",", ""))
+                except:
+                    return None
+
+            numeric_values = []
+            for col in df_transposed.columns:
+                if col != label:
+                    numeric_values.extend([try_parse(x) for x in df_transposed[col] if try_parse(x) is not None])
+
+            max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+            if max_abs_val >= 1e12:
+                scale, suffix = 1e12, "T"
+            elif max_abs_val >= 1e9:
+                scale, suffix = 1e9, "B"
+            elif max_abs_val >= 1e6:
+                scale, suffix = 1e6, "M"
+            elif max_abs_val >= 1e3:
+                scale, suffix = 1e3, "K"
+            else:
+                scale, suffix = 1, ""
+
+            def format_scaled(x):
+                val = try_parse(x)
+                return f"{val / scale:,.2f}" if val is not None else "—"
+
+            for col in df_transposed.columns:
+                if col != label:
+                    df_transposed[col] = df_transposed[col].apply(format_scaled)
+
+            st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
+            st.data_editor(
+                df_transposed,
+                use_container_width=True,
+                hide_index=True,
+                key="cash_flow_editor",
+                column_config={label: st.column_config.TextColumn(label)}
+            )
+        # ✅ Render it
+        format_cash_flow(cash_flow_df)
+    #### Financial Ratios ####
+
+    elif statement_tab == "Key Ratios":
+        if get_dolthub_cash_flow is not None:
+            cash_flow_df = get_dolthub_cash_flow(ticker)
+        else:
+            cash_flow_df = None  # or skip that section
+        st.markdown("### 📊 Key Financial Ratios (By Year)")
+
+        if any(df is None or df.empty for df in [assets_df, liabilities_df, equity_df, cash_flow_df, dolt_df]):
+            st.warning("Missing data from one or more financial statements. Please ensure all statements are loaded.")
+        else:
+            # --- Standardize date + period ---
+            for df in [assets_df, liabilities_df, equity_df, cash_flow_df, dolt_df]:
+                df["date"] = pd.to_datetime(df["date"], errors="coerce")
+                df["period"] = df["period"].astype(str).str.upper()
+
+            period_filter = "YEAR" if statement_period == "Annual" else "QUARTER"
+            dolt_period = dolt_df[dolt_df["period"] == period_filter].copy()
+            assets_period = assets_df[assets_df["period"] == period_filter].copy()
+            liabilities_period = liabilities_df[liabilities_df["period"] == period_filter].copy()
+            equity_period = equity_df[equity_df["period"] == period_filter].copy()
+            cash_period = cash_flow_df[cash_flow_df["period"] == period_filter].copy()
+
+            merged = (
+                dolt_period
+                .merge(assets_period, on="date", suffixes=("", "_assets"))
+                .merge(liabilities_period, on="date", suffixes=("", "_liab"))
+                .merge(equity_period, on="date", suffixes=("", "_eq"))
+                .merge(cash_period, on="date", suffixes=("", "_cf"))
+            )
+
+            merged.sort_values("date", inplace=True)
+            merged["Period"] = merged["date"].dt.year.astype(str) if statement_period == "Annual" else merged["date"].dt.strftime("%Y Q%q")
+
+            # --- Calculate ratios ---
+            merged["Net Profit Margin"] = merged["net_income"] / merged["sales"]
+            merged["Gross Margin"] = (merged["sales"] - merged["cost_of_goods"]) / merged["sales"]
+            merged["ROA"] = merged["net_income"] / merged["total_assets"]
+            merged["ROE"] = merged["net_income"] / merged["total_equity"]
+            merged["Debt to Equity"] = merged["total_liabilities"] / merged["total_equity"]
+            merged["Debt Ratio"] = merged["total_liabilities"] / merged["total_assets"]
+            merged["Equity Ratio"] = merged["total_equity"] / merged["total_assets"]
+            merged["Interest Coverage"] = merged["pretax_income"] / merged["interest_expense"]
+            if "current_liabilities" in merged.columns:
+                merged["Operating Cash Flow Ratio"] = merged["net_cash_from_operating_activities"] / merged["current_liabilities"]
+            else:
+                merged["Operating Cash Flow Ratio"] = None
+
+            # Select and pivot
+            ratio_cols = [
+                "Period",
+                "Net Profit Margin",
+                "Gross Margin",
+                "ROA",
+                "ROE",
+                "Debt to Equity",
+                "Debt Ratio",
+                "Equity Ratio",
+                "Interest Coverage",
+                "Operating Cash Flow Ratio",
+            ]
+
+            ratio_df = merged[ratio_cols].drop_duplicates("Period").set_index("Period").T
+
+            # Format: percentage and decimal separation
+            percent_rows = ["Net Profit Margin", "Gross Margin", "ROA", "ROE", "Debt Ratio", "Equity Ratio"]
+            float_rows = ["Debt to Equity", "Interest Coverage", "Operating Cash Flow Ratio"]
+
+            def try_format(val, as_percent=False):
+                try:
+                    val = float(val)
+                    return f"{val * 100:.1f}%" if as_percent else f"{val:.2f}"
+                except:
+                    return "—"
+
+            for row in ratio_df.index:
+                if row in percent_rows:
+                    ratio_df.loc[row] = ratio_df.loc[row].apply(lambda x: try_format(x, as_percent=True))
+                elif row in float_rows:
+                    ratio_df.loc[row] = ratio_df.loc[row].apply(lambda x: try_format(x, as_percent=False))
+
+            # Reset index so ratios become a column
+            ratio_df.reset_index(inplace=True)
+            ratio_df.rename(columns={"index": "Ratio"}, inplace=True)
+
+            # Display
+            st.data_editor(
+                ratio_df,
+                use_container_width=True,
+                hide_index=True
+            )
+
+    # -------------------------
+    # TRANSPOSE + CLEANUP + CONSISTENT UNIT FORMATTING
+    # -------------------------
+    if statement_tab == "Income Statement" and not filtered_df.empty:
+
+        label = "Income Statement"   # ✅ define label here
+
+        if "date" not in filtered_df.columns:
+            st.error("No date column found in income statement.")
+        else:
+            # Keep raw numeric values
+            ordered_cols = ["date"] + [c for c in filtered_df.columns if c != "date"]
+            df_clean = filtered_df[ordered_cols].copy()
+
+            # Convert and sort by date
+            df_clean["date"] = pd.to_datetime(df_clean["date"], errors="coerce")
+            df_clean = df_clean.sort_values("date")
+
+            # Transpose
+            df_transposed = (
+                df_clean.set_index("date")
+                        .T
+                        .reset_index()
+                        .rename(columns={"index": label})
+            )
+
+        # Remove act_symbol & period rows
+        df_transposed = df_transposed[~df_transposed[label].isin(["act_symbol", "period"])]
+
+        # Clean metric names
+        df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
+
+        # Format date columns
+        formatted_cols = []
+        for col in df_transposed.columns:
+            if isinstance(col, pd.Timestamp):
+                if statement_period == "Annual":
+                    formatted_cols.append(col.strftime("%Y"))
+                else:
+                    q = (col.month - 1) // 3 + 1
+                    formatted_cols.append(f"{col.year} Q{q}")
+            else:
+                formatted_cols.append(col)
+
+        df_transposed.columns = formatted_cols
+
+        # Determine best unit scale
+        def try_parse(x):
+            try:
+                return float(str(x).replace(",", ""))
+            except:
+                return None
+
+        numeric_values = []
+        for col in df_transposed.columns:
+            if col != label:
+                numeric_values.extend(
+                    [try_parse(x) for x in df_transposed[col] if try_parse(x) is not None]
+                )
+
+        max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+
+        if max_abs_val >= 1e12:
+            scale, suffix = 1e12, "T"
+        elif max_abs_val >= 1e9:
+            scale, suffix = 1e9, "B"
+        elif max_abs_val >= 1e6:
+            scale, suffix = 1e6, "M"
+        elif max_abs_val >= 1e3:
+            scale, suffix = 1e3, "K"
+        else:
+            scale, suffix = 1, ""
+
+        # Format numeric columns
+        def format_scaled(x):
+            val = try_parse(x)
+            return f"{val / scale:,.2f}" if val is not None else "—"
+
+        for col in df_transposed.columns:
+            if col != label:
+                df_transposed[col] = df_transposed[col].apply(format_scaled)
+
+        # Caption
+        st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
+
+        # Output table
+        st.data_editor(
+            df_transposed,
+            use_container_width=True,
+            hide_index=True,
+            key="income_statement_transposed_editor",
+            column_config={
+                label: st.column_config.TextColumn(label)
+            }
+        )
+    

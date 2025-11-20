@@ -76,7 +76,7 @@ def display_charts(ticker, yf_df, dolt_df, using_dolthub):
 
         fig.update_layout(
             xaxis_title="Date",
-            yaxis_title="Price (USD)",
+            yaxis_title="Price",
             showlegend=False,
             margin=dict(l=40, r=40, t=30, b=40),
             plot_bgcolor="rgba(0,0,0,0)",

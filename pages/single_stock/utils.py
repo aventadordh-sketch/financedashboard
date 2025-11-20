@@ -152,3 +152,64 @@ def format_ratio(val):
         return f"{float(val):.2f}"
     except:
         return "—"
+    
+def style_growth_from_prev(df, label_col):
+    import numpy as np
+
+    def try_float(x):
+        try:
+            s = str(x).replace(",", "").strip()
+            if s.endswith("%"):
+                return float(s[:-1])     # convert "5.23%" → 5.23
+            return float(s)
+        except:
+            return np.nan
+
+    def apply_row_gradient(row):
+        result = [""]
+
+        for i in range(1, len(row)):
+            prev, curr = row[i - 1], row[i]
+            prev_f = try_float(prev)
+            curr_f = try_float(curr)
+
+            if np.isnan(prev_f) or np.isnan(curr_f):
+                result.append("")
+            elif curr_f > prev_f:
+                result.append("color: #6FCF97")   # green
+            elif curr_f < prev_f:
+                result.append("color: #D87C6E")   # red
+            else:
+                result.append("color: white")
+        
+        return result
+
+    return df.style.apply(apply_row_gradient, axis=1, subset=df.columns[1:])
+
+def style_yoy_percent(df, label_col):
+    import numpy as np
+
+    def try_float(x):
+        try:
+            s = str(x).replace("%", "").replace(",", "").strip()
+            return float(s)
+        except:
+            return np.nan
+
+    def apply_color(row):
+        result = [""]  # skip label column
+        for val in row[1:]:
+            f = try_float(val)
+            if np.isnan(f):
+                result.append("")
+            elif f > 0:
+                result.append("color: #6FCF97")  # green
+            elif f < 0:
+                result.append("color: #D87C6E")  # red
+            else:
+                result.append("color: white")
+        return result
+
+    return df.style.apply(apply_color, axis=1)
+
+
