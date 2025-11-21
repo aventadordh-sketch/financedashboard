@@ -107,49 +107,110 @@ def render_income_statement_values(dolt_df, statement_period, style_growth_from_
 
 
 def compute_yoy_table(df, label_name, statement_period):
-    import pandas as pd
-
+    """
+    Computes YoY % change table based on date, for Income, Balance Sheet, Cash Flow.
+    - Filters by period (YEAR / QUARTER) if 'period' column exists
+    - Returns a transposed table with human-readable column labels (YYYY or YYYY Qx)
+    - Output is ready to pass into style_yoy_percent(...)
+    """
     if df is None or df.empty:
         return None
 
     df = df.copy()
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["period"] = df["period"].astype(str).str.upper()
 
-    period_filter = "YEAR" if statement_period == "Annual" else "QUARTER"
-    df = df[df["period"] == period_filter]
-
-    if df.empty:
+    # Must have a date column
+    if "date" not in df.columns:
         return None
 
-    df = df.sort_values("date")
+    # Normalize date
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-    # Metrics only — no metadata
-    metric_cols = [c for c in df.columns if c not in ["date", "period", "act_symbol"]]
-    df_clean = df[["date"] + metric_cols].set_index("date").T
+    # If period exists, filter by Annual / Quarterly
+    if "period" in df.columns:
+        df["period"] = df["period"].astype(str).str.upper()
+        period_filter = "YEAR" if statement_period == "Annual" else "QUARTER"
+        df = df[df["period"] == period_filter]
 
-    # Compute YoY % = (curr / prev - 1) * 100
-    yoy = df_clean.pct_change(axis=1) * 100
-    yoy = yoy.round(2)
+    # Drop rows with no date and sort
+    df = df.dropna(subset=["date"]).sort_values("date")
 
-    # Format as percent strings ("5.23%")
-    yoy = yoy.applymap(lambda v: f"{v:.2f}%" if pd.notnull(v) else "—")
+    # Need at least 2 periods to compute change
+    if df["date"].nunique() < 2:
+        return None
 
-    # Insert label column
-    yoy.insert(0, label_name, yoy.index.str.replace("_", " ").str.title())
-    yoy.reset_index(drop=True, inplace=True)
+    # Keep only numeric value columns (exclude metadata)
+    numeric_cols = []
+    for c in df.columns:
+        if c in ["date", "act_symbol", "period"]:
+            continue
+        if pd.api.types.is_numeric_dtype(df[c]):
+            numeric_cols.append(c)
 
-    # Clean column names: 2022 or 2022 Q1
-    yoy.columns = [label_name] + [
-        col.strftime("%Y") if statement_period == "Annual"
-        else f"{col.year} Q{((col.month - 1)//3)+1}"
-        for col in df_clean.columns
-    ]
+    if not numeric_cols:
+        return None
 
-    return yoy
+    # Wide format: index = date, columns = metrics
+    wide = (
+        df[["date"] + numeric_cols]
+        .drop_duplicates(subset="date")
+        .set_index("date")
+    )
 
+    # YoY % change by date
+    yoy = wide.pct_change() * 100
+    yoy = yoy.iloc[1:]  # drop the first NaN row
 
+    if yoy.empty:
+        return None
 
+    # Transpose for display: rows = metrics, columns = dates
+    yoy_t = yoy.T.reset_index()
+    yoy_t = yoy_t.rename(columns={"index": label_name})
+
+    # Build readable period labels from the date index
+    # yoy.index is a DatetimeIndex of the dates we used
+    dates = list(yoy.index)
+
+    pretty = []
+    for d in dates:
+        if isinstance(d, pd.Timestamp):
+            if statement_period == "Annual":
+                pretty.append(d.strftime("%Y"))
+            else:
+                q = (d.month - 1) // 3 + 1
+                pretty.append(f"{d.year} Q{q}")
+        else:
+            pretty.append(str(d))
+
+    # Ensure unique column names (required for Styler)
+    final_cols = [label_name]
+    seen = {}
+    for col in pretty:
+        if col in seen:
+            seen[col] += 1
+            final_cols.append(f"{col}_{seen[col]}")
+        else:
+            seen[col] = 1
+            final_cols.append(col)
+
+    # Now length matches exactly: 1 label + len(dates)
+    yoy_t.columns = final_cols
+
+    # Format as percentages
+    for c in yoy_t.columns[1:]:
+        yoy_t[c] = yoy_t[c].apply(
+            lambda x: f"{x:.2f}%" if pd.notnull(x) else "—"
+        )
+
+    # --- Clean metric names to match value tables ---
+    yoy_t[label_name] = (
+        yoy_t[label_name]
+        .astype(str)
+        .str.replace("_", " ")
+        .str.title()
+    )
+
+    return yoy_t
 
 
 # 🔍 Display financial statements + key ratios
@@ -197,15 +258,17 @@ def display_fundamentals(
 # -----------------------------
     if statement_tab == "Income Statement":
 
-        view_mode = st.segmented_control(
-            "",
-            options=["Values", "YoY Change"],
-        )
+        # SINGLE TOGGLE BUTTON
+        yoy_toggle = st.checkbox("% Change", value=False)
 
-        if view_mode == "Values":
-            render_income_statement_values(dolt_df, statement_period, style_growth_from_prev)
+        if not yoy_toggle:
+            # Default values table
+            render_income_statement_values(
+                dolt_df, statement_period, style_growth_from_prev
+            )
 
         else:
+            # YoY table
             yoy_df = compute_yoy_table(
                 df=dolt_df,
                 label_name="Income Statement",
@@ -217,142 +280,180 @@ def display_fundamentals(
             else:
                 styled = style_yoy_percent(yoy_df, "Income Statement")
                 st.dataframe(styled, use_container_width=True, hide_index=True)
+
     # -----------------------------
     # Balance Sheet
     # -----------------------------
     elif statement_tab == "Balance Sheet":
-        def format_balance_sheet(df, label):
-            if df is None or df.empty:
-                return st.info(f"No {label} data available.")
 
-            df = df.copy()
-            df["date"] = pd.to_datetime(df["date"], errors="coerce")
-            df["period"] = df["period"].str.upper()
-            df = df[df["period"] == ("YEAR" if statement_period == "Annual" else "QUARTER")]
+        # One toggle for all parts of the balance sheet
+        yoy_toggle = st.checkbox("% Change", value=False)
 
-            if df is None or df.empty:
-                return st.info(f"No {statement_period.lower()} data for {label}.")
-
-            df = df.sort_values("date")
-            ordered_cols = ["date"] + [col for col in df.columns if col not in ["date", "act_symbol", "period"]]
-            df_clean = df[ordered_cols].copy()
-
-            df_transposed = (
-                df_clean.set_index("date")
-                        .T
-                        .reset_index()
-                        .rename(columns={"index": label})
-            )
-
-            df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
-
-            # Format column names
-            formatted_cols = []
-            for col in df_transposed.columns:
-                if isinstance(col, pd.Timestamp):
-                    if statement_period == "Annual":
-                        formatted_cols.append(col.strftime("%Y"))
-                    else:
-                        q = (col.month - 1) // 3 + 1
-                        formatted_cols.append(f"{col.year} Q{q}")
-                else:
-                    formatted_cols.append(col)
-            df_transposed.columns = formatted_cols
-
-            # Scale logic
-            def try_parse(x):
-                try:
-                    return float(str(x).replace(",", ""))
-                except:
-                    return None
-
-            numeric_values = []
-            for col in df_transposed.columns:
-                if col != label:
-                    numeric_values.extend([try_parse(x) for x in df_transposed[col] if try_parse(x) is not None])
-
-            max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
-            if max_abs_val >= 1e12:
-                scale, suffix = 1e12, "T"
-            elif max_abs_val >= 1e9:
-                scale, suffix = 1e9, "B"
-            elif max_abs_val >= 1e6:
-                scale, suffix = 1e6, "M"
-            elif max_abs_val >= 1e3:
-                scale, suffix = 1e3, "K"
-            else:
-                scale, suffix = 1, ""
-
-            def format_scaled(x):
-                val = try_parse(x)
-                return f"{val / scale:,.2f}" if val is not None else "—"
-
-            for col in df_transposed.columns:
-                if col != label:
-                    df_transposed[col] = df_transposed[col].apply(format_scaled)
-
-            # Caption for unit scaling
-            st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
-
-            # Apply growth-based styling
-            styled_df = style_growth_from_prev(df_transposed, label)
-
-            # Render with gradient based on previous column
-            st.dataframe(styled_df, use_container_width=True, hide_index=True)
-
-        format_balance_sheet(assets_df, "Assets")
-        format_balance_sheet(liabilities_df, "Liabilities")
-        format_balance_sheet(equity_df, "Equity")
-
-# -----------------------------
-# Cash Flow Statement
-# -----------------------------
-    elif statement_tab == "Cash Flow":
-        dolt_df = get_dolthub_cash_flow(ticker)
-
-        # ✅ Step 2: Build cash_flow_df using ordered fields (safe for DoltHub + fallback)
-        meta_columns = ["date", "period", "act_symbol"]
-
-        # Meta fields available in DoltHub
-        available_meta = []
-        if dolt_df is not None:
-            available_meta = [col for col in meta_columns if col in dolt_df.columns]
-
-        # Cash flow fields available in DoltHub
-        available_cash_cols = []
-        if dolt_df is not None:
-            available_cash_cols = [col for col in CASH_FLOW_FIELDS if col in dolt_df.columns]
-
-        # FINAL: Build DataFrame only if dolt_df exists
-        if dolt_df is not None:
-            selected_cols = available_meta + available_cash_cols
-
-            if selected_cols:  # only build DF if at least 1 column exists
-                cash_flow_df = dolt_df[selected_cols].copy()
-            else:
-                cash_flow_df = pd.DataFrame()
-        else:
-            # Yahoo fallback: no DoltHub data
-            cash_flow_df = pd.DataFrame()
-
-
-        # ✅ Step 3: Format and render
-        def format_cash_flow(df, label="Cash Flow"):
+        def render_balance_sheet_section(df, label):
             if df is None or df.empty:
                 return st.info(f"No {label} data available.")
 
             df = df.copy()
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             df["period"] = df["period"].astype(str).str.upper()
-            df = df[df["period"] == ("YEAR" if statement_period == "Annual" else "QUARTER")]
+
+            period_value = "YEAR" if statement_period == "Annual" else "QUARTER"
+            df = df[df["period"] == period_value]
 
             if df.empty:
-                return st.info(f"No {statement_period.lower()} cash flow data available.")
+                return st.info(f"No {statement_period.lower()} data available for {label}.")
 
             df = df.sort_values("date")
+            ordered_cols = ["date"] + [
+                col for col in df.columns
+                if col not in ["date", "act_symbol", "period"]
+            ]
+            df_clean = df[ordered_cols].copy()
+
+            if not yoy_toggle:
+                # -------------------------
+                # VALUES MODE (default)
+                # -------------------------
+                df_transposed = (
+                    df_clean.set_index("date")
+                            .T
+                            .reset_index()
+                            .rename(columns={"index": label})
+                )
+
+                # Clean names
+                df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
+
+                # Format columns as years / quarters
+                formatted_cols = []
+                for col in df_transposed.columns:
+                    if isinstance(col, pd.Timestamp):
+                        if statement_period == "Annual":
+                            formatted_cols.append(col.strftime("%Y"))
+                        else:
+                            q = (col.month - 1) // 3 + 1
+                            formatted_cols.append(f"{col.year} Q{q}")
+                    else:
+                        formatted_cols.append(col)
+                df_transposed.columns = formatted_cols
+
+                # Determine scale
+                def try_parse(x):
+                    try:
+                        return float(str(x).replace(",", ""))
+                    except:
+                        return None
+
+                numeric_values = [
+                    try_parse(x)
+                    for col in df_transposed.columns if col != label
+                    for x in df_transposed[col]
+                    if try_parse(x) is not None
+                ]
+
+                max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+
+                if max_abs_val >= 1e12:
+                    scale, suffix = 1e12, "T"
+                elif max_abs_val >= 1e9:
+                    scale, suffix = 1e9, "B"
+                elif max_abs_val >= 1e6:
+                    scale, suffix = 1e6, "M"
+                elif max_abs_val >= 1e3:
+                    scale, suffix = 1e3, "K"
+                else:
+                    scale, suffix = 1, ""
+
+                def format_scaled(x):
+                    val = try_parse(x)
+                    return f"{val / scale:,.2f}" if val is not None else "—"
+
+                for col in df_transposed.columns:
+                    if col != label:
+                        df_transposed[col] = df_transposed[col].apply(format_scaled)
+
+                st.caption(f"All values shown in **{suffix}**")
+
+                styled = style_growth_from_prev(df_transposed, label)
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+                return
+
+            # -------------------------
+            # YOY MODE
+            # -------------------------
+            yoy_df = compute_yoy_table(
+                df=df,
+                label_name=label,
+                statement_period=statement_period
+            )
+
+            if yoy_df is None:
+                st.info("Not enough data for YoY calculations.")
+                return
+
+            styled = style_yoy_percent(yoy_df, label)
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+        # Render each subsection
+        st.subheader("Assets")
+        render_balance_sheet_section(assets_df, "Assets")
+
+        st.subheader("Liabilities")
+        render_balance_sheet_section(liabilities_df, "Liabilities")
+
+        st.subheader("Equity")
+        render_balance_sheet_section(equity_df, "Equity")
+
+
+    # -----------------------------
+    # Cash Flow Statement
+    # -----------------------------
+    elif statement_tab == "Cash Flow":
+
+        # Load cash flow from DoltHub
+        cash_flow_df = get_dolthub_cash_flow(ticker)
+
+        # SINGLE TOGGLE BUTTON
+        yoy_toggle = st.checkbox("% Change", value=False)
+
+        def render_cash_flow(df, label="Cash Flow"):
+            if df is None or df.empty:
+                return st.info(f"No {label} data available.")
+
+            df = df.copy()
+            df["date"] = pd.to_datetime(df["date"], errors="coerce")
+            df["period"] = df["period"].astype(str).str.upper()
+
+            period_value = "YEAR" if statement_period == "Annual" else "QUARTER"
+            df = df[df["period"] == period_value]
+
+            if df.empty:
+                return st.info(f"No {statement_period.lower()} {label.lower()} data available.")
+
+            df = df.sort_values("date")
+
+            # Always restrict to standard cash flow fields
             ordered_cols = ["date"] + [col for col in CASH_FLOW_FIELDS if col in df.columns]
             df_clean = df[ordered_cols].copy()
 
+            # -----------------------------
+            # YOY MODE
+            # -----------------------------
+            if yoy_toggle:
+                yoy_df = compute_yoy_table(
+                    df=df_clean,
+                    label_name=label,
+                    statement_period=statement_period
+                )
+                if yoy_df is None:
+                    return st.info("Not enough data for YoY calculations.")
+                styled = style_yoy_percent(yoy_df, label)
+                st.dataframe(styled, use_container_width=True, hide_index=True)
+                return
+
+            # -----------------------------
+            # VALUES MODE (default)
+            # -----------------------------
             df_transposed = (
                 df_clean.set_index("date")
                         .T
@@ -362,7 +463,7 @@ def display_fundamentals(
 
             df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
 
-            # Format column names (date columns)
+            # Format column names (years or quarters)
             formatted_cols = []
             for col in df_transposed.columns:
                 if isinstance(col, pd.Timestamp):
@@ -375,7 +476,7 @@ def display_fundamentals(
                     formatted_cols.append(col)
             df_transposed.columns = formatted_cols
 
-            # Detect scaling
+            # Determine best scaling
             def try_parse(x):
                 try:
                     return float(str(x).replace(",", ""))
@@ -385,9 +486,12 @@ def display_fundamentals(
             numeric_values = []
             for col in df_transposed.columns:
                 if col != label:
-                    numeric_values.extend([try_parse(x) for x in df_transposed[col] if try_parse(x) is not None])
+                    numeric_values.extend(
+                        [try_parse(x) for x in df_transposed[col] if try_parse(x) is not None]
+                    )
 
             max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
+
             if max_abs_val >= 1e12:
                 scale, suffix = 1e12, "T"
             elif max_abs_val >= 1e9:
@@ -407,13 +511,14 @@ def display_fundamentals(
                 if col != label:
                     df_transposed[col] = df_transposed[col].apply(format_scaled)
 
-            st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
+            st.caption(f"All values shown in **{suffix}**")
 
             styled_df = style_growth_from_prev(df_transposed, label)
             st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-        # ✅ Render it
-        format_cash_flow(cash_flow_df)
+        # Render it
+        render_cash_flow(cash_flow_df)
+
 
 #### Financial Ratios ####
     elif statement_tab == "Key Ratios":
@@ -519,93 +624,4 @@ def display_fundamentals(
 
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
-    # -------------------------
-    # TRANSPOSE + CLEANUP + CONSISTENT UNIT FORMATTING
-    # -------------------------
-    if statement_tab == "Income Statement" and not filtered_df.empty:
 
-        label = "Income Statement"   # ✅ define label here
-
-        if "date" not in filtered_df.columns:
-            st.error("No date column found in income statement.")
-        else:
-            # Keep raw numeric values
-            ordered_cols = ["date"] + [c for c in filtered_df.columns if c != "date"]
-            df_clean = filtered_df[ordered_cols].copy()
-
-            # Convert and sort by date
-            df_clean["date"] = pd.to_datetime(df_clean["date"], errors="coerce")
-            df_clean = df_clean.sort_values("date")
-
-            # Transpose
-            df_transposed = (
-                df_clean.set_index("date")
-                        .T
-                        .reset_index()
-                        .rename(columns={"index": label})
-            )
-
-        # Remove act_symbol & period rows
-        df_transposed = df_transposed[~df_transposed[label].isin(["act_symbol", "period"])]
-
-        # Clean metric names
-        df_transposed[label] = df_transposed[label].str.replace("_", " ").str.title()
-
-        # Format date columns
-        formatted_cols = []
-        for col in df_transposed.columns:
-            if isinstance(col, pd.Timestamp):
-                if statement_period == "Annual":
-                    formatted_cols.append(col.strftime("%Y"))
-                else:
-                    q = (col.month - 1) // 3 + 1
-                    formatted_cols.append(f"{col.year} Q{q}")
-            else:
-                formatted_cols.append(col)
-
-        df_transposed.columns = formatted_cols
-
-        # Determine best unit scale
-        def try_parse(x):
-            try:
-                return float(str(x).replace(",", ""))
-            except:
-                return None
-
-        numeric_values = []
-        for col in df_transposed.columns:
-            if col != label:
-                numeric_values.extend(
-                    [try_parse(x) for x in df_transposed[col] if try_parse(x) is not None]
-                )
-
-        max_abs_val = max(abs(v) for v in numeric_values) if numeric_values else 1
-
-        if max_abs_val >= 1e12:
-            scale, suffix = 1e12, "T"
-        elif max_abs_val >= 1e9:
-            scale, suffix = 1e9, "B"
-        elif max_abs_val >= 1e6:
-            scale, suffix = 1e6, "M"
-        elif max_abs_val >= 1e3:
-            scale, suffix = 1e3, "K"
-        else:
-            scale, suffix = 1, ""
-
-        # Format numeric columns
-        def format_scaled(x):
-            val = try_parse(x)
-            return f"{val / scale:,.2f}" if val is not None else "—"
-
-        for col in df_transposed.columns:
-            if col != label:
-                df_transposed[col] = df_transposed[col].apply(format_scaled)
-
-        # Caption
-        st.caption(f"All values shown in **{suffix}** (e.g., 1.25{suffix} = {int(scale):,})")
-
-            # Apply growth-based styling
-        styled_df = style_growth_from_prev(df_transposed, label)
-
-            # Render with gradient based on previous column
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
