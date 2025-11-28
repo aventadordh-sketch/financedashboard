@@ -5,27 +5,29 @@ import time
 from datetime import datetime
 from typing import List, Tuple, Dict, Any # Added typing for clarity
 
+from src.config_gemini import get_gemini_client # import gemini client function
+
 # IMPORTANT: We need to import the FRED-related functions from economic_utils 
 # to make the synthesis function work, so we'll place the synthesis logic 
 # in economic_utils.py as originally planned, and ensure this file provides 
 # the necessary GEMINI client.
 
 # --- 1. Client Initialization ---
-@st.cache_resource
-def get_gemini_client():
-    """
-    Initializes the Gemini client from secrets.
-    """
-    try:
-        # Check if the key exists before trying to initialize
-        if "GEMINI_API_KEY" not in st.secrets:
-             st.error("🔒 GEMINI_API_KEY not found in .streamlit/secrets.toml.")
-             return None
+# @st.cache_resource
+# def get_gemini_client():
+#     """
+#     Initializes the Gemini client from secrets.
+#     """
+#     try:
+#         # Check if the key exists before trying to initialize
+#         if "GEMINI_API_KEY" not in st.secrets:
+#              st.error("🔒 GEMINI_API_KEY not found in .streamlit/secrets.toml.")
+#              return None
              
-        return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-    except Exception as e:
-        st.error(f"Error initializing Gemini: {e}")
-        return None
+#         return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+#     except Exception as e:
+#         st.error(f"Error initializing Gemini: {e}")
+#         return None
 
 # --- 2. Scraping & Summarization (Stealth Mode Enhanced) ---
 @st.cache_data(ttl=86400)
