@@ -2,3 +2,4 @@ earnings/
 .env
 .env.*
 *.env
+.streamlit/secrets.toml
