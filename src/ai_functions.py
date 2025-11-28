@@ -3,6 +3,12 @@ from google import genai
 from playwright.sync_api import sync_playwright
 import time
 from datetime import datetime
+from typing import List, Tuple, Dict, Any # Added typing for clarity
+
+# IMPORTANT: We need to import the FRED-related functions from economic_utils 
+# to make the synthesis function work, so we'll place the synthesis logic 
+# in economic_utils.py as originally planned, and ensure this file provides 
+# the necessary GEMINI client.
 
 # --- 1. Client Initialization ---
 @st.cache_resource
@@ -11,10 +17,12 @@ def get_gemini_client():
     Initializes the Gemini client from secrets.
     """
     try:
+        # Check if the key exists before trying to initialize
+        if "GEMINI_API_KEY" not in st.secrets:
+             st.error("🔒 GEMINI_API_KEY not found in .streamlit/secrets.toml.")
+             return None
+             
         return genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-    except KeyError:
-        st.error("🔒 Gemini API Key not found. Please add GEMINI_API_KEY to your .streamlit/secrets.toml file.")
-        return None
     except Exception as e:
         st.error(f"Error initializing Gemini: {e}")
         return None
@@ -42,7 +50,6 @@ def scrape_and_summarize(urls: list, topic: str, _client) -> dict:
             
             try:
                 # 🛠️ STEALTH FIX v2: Advanced Context Emulation
-                # Mimic a real screen size, locale, and timezone to look authentic
                 context = browser.new_context(
                     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
                     viewport={"width": 1920, "height": 1080},
@@ -66,8 +73,7 @@ def scrape_and_summarize(urls: list, topic: str, _client) -> dict:
                 except Exception as e:
                     print(f"Navigation warning for {url}: {e}")
 
-                # 2. 🖱️ Human Behavior: Scroll to bottom to trigger lazy loading
-                # Many sites won't load the main article text until you scroll down
+                # 2. 🖱️ Human Behavior: Scroll
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
                 time.sleep(1)
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -75,16 +81,7 @@ def scrape_and_summarize(urls: list, topic: str, _client) -> dict:
                 
                 # 3. Targeted Extraction
                 content = ""
-                # Added more specific selectors common in financial news
-                selectors = [
-                    "article", 
-                    "[role='main']", 
-                    ".ArticleBody-articleBody", # CNBC specific
-                    ".paywall-article", # Reuters specific
-                    ".story-text",
-                    "main", 
-                    "body"
-                ]
+                selectors = ["article", "[role='main']", ".ArticleBody-articleBody", ".paywall-article", ".story-text", "main", "body"]
                 
                 for selector in selectors:
                     try:
